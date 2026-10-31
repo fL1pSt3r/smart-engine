@@ -5,4 +5,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
-add_executable(smart_engine main.cpp)
+
+add_executable(smart_engine
+        main.cpp
+        ecs/world.cpp
+)
+
+target_compile_options(smart_engine PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+)
