@@ -1,6 +1,5 @@
 #pragma once
 
-#include <cstdint> // std::uint64_t
 #include <unordered_map> // std::unordered_map
 #include <unordered_set> // std::unordered_set
 #include <vector> // std::vector
@@ -13,14 +12,28 @@
 #include <memory>    // std::unique_ptr
 #include <tuple> // std::tuple
 #include <algorithm> // std::min
+#include <ranges> // std::views
+#include <span> // std::span
 
 namespace engine::ecs {
 
-using Entity = std::uint64_t;
+struct Entity {
+    std::uint32_t index = 0;
+    std::uint32_t generation = 0;
+
+    bool operator==(const Entity&) const = default;
+};
 
 class World {
-    Entity nextEntity = 1;
-    std::unordered_set<Entity> entities;
+    struct EntitySlot {
+        std::uint32_t generation = 1;
+        bool alive = false;
+    };
+
+    // нулевой слот оставляем для отсутствующей сущности.
+    std::vector<EntitySlot> entitySlots{EntitySlot{}};
+
+    std::vector<std::uint32_t> freeIndices;
 
     // для доступа к разным типам ComponentStorage
     struct IComponentStorage {
@@ -42,31 +55,34 @@ class World {
         // т.к. компоненты могут удаляться вместе с овнерами, удаление занимает много времени.
         std::vector<std::size_t> indices;
     public:
-        bool has(const Entity entity) const {
-            return entity < indices.size() && indices[entity] != invalidIndex;
+        [[nodiscard]] bool has(const Entity entity) const {
+            if (entity.index >= indices.size()) return false;
+
+            const auto index = indices[entity.index];
+            return index != invalidIndex && owners[index] == entity;
         }
 
         T& get(const Entity entity) {
             if (!has(entity)) throw std::out_of_range("Component not found");
 
-            return components[indices[entity]];
+            return components[indices[entity.index]];
         }
 
         const T& get(const Entity entity) const {
             if (!has(entity)) throw std::out_of_range("Component not found");
 
-            return components[indices[entity]];
+            return components[indices[entity.index]];
         }
 
-        T& add(Entity entity, T component) {
+        T& add(const Entity entity, T component) {
             // проверяем повторное добавление – не более одного компонента каждого типа
             if (has(entity)) throw std::invalid_argument("Component already exists");
 
-            // расширяем вектор индексов
-            if (entity >= indices.size()) {
-                if (entity >= indices.max_size()) throw std::length_error("Entity ID is too large");
+            const std::size_t entityIndex = entity.index;
+            if (entityIndex >= indices.size()) {
+                if (entityIndex >= indices.max_size()) throw std::length_error("Entity index is too large");
 
-                indices.resize(entity + 1, invalidIndex);
+                indices.resize(entityIndex + 1, invalidIndex);
             }
 
             // запоминаем индекс для компонента
@@ -81,17 +97,17 @@ class World {
                 throw;
             }
 
-            indices[entity] = index; // связываем владельца и компонент
+            indices[entityIndex] = index; // связываем владельца и компонент
             return components.back();
         }
 
-        bool remove(Entity entity) override {
+        bool remove(const Entity entity) override {
             // проверяем, что объекту типа T можно присвоить другой объект перемещением без исключений
             static_assert(std::is_nothrow_move_assignable_v<T>, "Component move assignment must be noexcept");
 
             if (!has(entity)) return false;
 
-            const std::size_t component_index = indices[entity];
+            const std::size_t component_index = indices[entity.index];
             const std::size_t lastIndex = components.size() - 1;
 
             // если текущий компонент не последний, то
@@ -101,21 +117,18 @@ class World {
                 components[component_index] = std::move(components[lastIndex]);
                 owners[component_index] = owners[lastIndex];
 
-                indices[owners[component_index]] = component_index;
+                indices[owners[component_index].index] = component_index;
             }
 
             components.pop_back();
             owners.pop_back();
 
-            indices[entity] = invalidIndex;
+            indices[entity.index] = invalidIndex;
             return true;
         }
     };
 
-    std::unordered_map<
-        std::type_index, // GOD SAVE C++17
-        std::unique_ptr<IComponentStorage>
-    > storages;
+    std::unordered_map<std::type_index, std::unique_ptr<IComponentStorage>> storages;
 
     template<typename T>
     ComponentStorage<T>& getStorage() {
@@ -140,20 +153,18 @@ class World {
     }
 public:
     Entity createEntity();
-
-    bool isAlive(Entity entity) const;
-
+    [[nodiscard]] bool isAlive(Entity entity) const;
     bool destroyEntity(Entity entity);
 
     template<typename T>
-    T& addComponent(Entity entity, T component) {
+    T& addComponent(const Entity entity, T component) {
         if (!isAlive(entity)) throw std::out_of_range("Entity is not alive");
 
         return getStorage<T>().add(entity, std::move(component));
     }
 
     template<typename T>
-    bool hasComponent(Entity entity) const {
+    [[nodiscard]] bool hasComponent(const Entity entity) const {
         if (!isAlive(entity)) return false;
 
         // есть ли вообще такое хранилище компонентов
@@ -165,7 +176,7 @@ public:
     }
 
     template<typename T>
-    T& getComponent(Entity entity) {
+    T& getComponent(const Entity entity) {
         if (!isAlive(entity)) throw std::out_of_range("Entity is not alive");
 
         const auto it = storages.find(std::type_index(typeid(T)));
@@ -176,7 +187,7 @@ public:
     }
 
     template<typename T>
-    const T& getComponent(Entity entity) const {
+    const T& getComponent(const Entity entity) const {
         if (!isAlive(entity)) throw std::out_of_range("Entity is not alive");
 
         const auto it = storages.find(std::type_index(typeid(T)));
@@ -187,7 +198,7 @@ public:
     }
 
     template<typename T>
-    bool removeComponent(Entity entity) {
+    bool removeComponent(const Entity entity) {
         if (!isAlive(entity)) return false;
 
         const auto it = storages.find(std::type_index(typeid(T)));
@@ -198,39 +209,45 @@ public:
 
     template<typename... Components>
     auto query() {
-        std::vector<std::tuple<Entity, Components&...>> result;
         // получаем указатели на хранилища выбранных компонентов
         const auto pointers = std::tuple{findStorage<Components>()...};
 
-        std::apply([&](auto*... storage) {
+        return std::apply([](auto*... storage) {
+            // span – хранит поинтер первого элементаи размер, const т.к. владельцев не меняем
+            std::span<const Entity> candidates;
             // проверяем, есть ли вообще хранилища для наших компонентов
-            if ((!storage || ...)) {
-                return;
+            if ((storage && ...)) {
+                // оптимизация заключается в том, что любая подходящая сущность должна присутсвовать во всех хранилищах,
+                // включая самое маленькое которое легче всего обойти.
+                // candidates - вектор владельцев
+                const auto* smallest = std::min(
+                    {&storage->owners...},
+                    [](const auto* a, const auto* b) {
+                        return a->size() < b->size();
+                    }
+                );
+                candidates = std::span<const Entity>{*smallest};
             }
 
-            // оптимизация заключается в том, что любая подходящая сущность должна присутсвовать во всех хранилищах,
-            // включая самое маленькое которое легче всего обойти.
-            // candidates - вектор владельцев
-            const auto* candidates = std::min(
-                {&storage->owners...},
-                [](const auto* a, const auto* b) {
-                    return a->size() < b->size();
-                }
-            );
+            // проверяем наличие всех компонентов
+            auto hasAllComponents = [=](Entity entity) {
+                return (storage->has(entity) && ...);
+            };
 
-            // заранее выделяем есто
-            result.reserve(candidates->size());
+            // собираем айди и ссылки на компоненты в кортеж
+            auto getComponents = [=](Entity entity) {
+                return std::tuple<Entity, Components&...>{
+                    entity,
+                    storage->get(entity)...
+                };
+            };
 
-            // перебираем для всех владельцев меньшего хранилища их нахождение во всех хранилищах
-            // и добавляем в результат, если есть все вхождения у этого владельца
-            for (Entity entity : *candidates) {
-                if ((storage->has(entity) && ...)) {
-                    result.emplace_back(entity, storage->get(entity)...);
-                }
-            }
+            // обход только подходящих сущностей
+            auto matching = std::views::filter(candidates, hasAllComponents);
+            // при обращении к сущности возвращаем ее кортеж
+            return std::views::transform(std::move(matching), getComponents);
+
         }, pointers); // передаем pointers в storage
-
-        return result;
     }
 };
 
