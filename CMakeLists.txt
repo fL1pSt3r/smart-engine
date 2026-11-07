@@ -6,13 +6,25 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
-add_executable(smart_engine
-        main.cpp
-        ecs/world.cpp
+add_library(engine STATIC
+        engine/ecs/world.cpp
+        engine/systems/movement.cpp
+        engine/simulation/simulation.cpp
+        engine/geometry/collision.cpp
 )
 
-target_compile_options(smart_engine PRIVATE
-        -Wall
-        -Wextra
-        -Wpedantic
+target_include_directories(engine PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/engine"
 )
+
+add_executable(robot_game game/main.cpp)
+target_link_libraries(robot_game PRIVATE engine)
+
+add_executable(world_tests tests/world_tests.cpp)
+target_link_libraries(world_tests PRIVATE engine)
+
+foreach(target engine robot_game world_tests)
+    target_compile_options(${target} PRIVATE
+            -Wall -Wextra -Wpedantic
+    )
+endforeach()
