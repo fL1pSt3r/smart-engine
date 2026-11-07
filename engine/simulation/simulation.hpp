@@ -15,6 +15,7 @@ class Simulation {
     static constexpr float fixedDt = 1.0f / 60.0f;
 
 public:
+    static constexpr float getFixedDt() noexcept { return fixedDt; }
     ecs::World& getWorld();
     void addSystem(const System &system);
     void step();
