@@ -5,7 +5,7 @@ struct SDL_Renderer;
 namespace engine {
 
 class Platform;
-namespace ecs { class World; }
+struct RenderSnapshot;
 
 class Renderer {
     SDL_Renderer* renderer = nullptr;
@@ -20,7 +20,7 @@ public:
     Renderer& operator=(const Renderer&) = delete;
 
     void clear() const;
-    void drawDebugWorld(ecs::World& world) const;
+    void drawSnapshot(const RenderSnapshot& snapshot) const;
     void present() const;
 };
 

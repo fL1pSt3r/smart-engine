@@ -30,6 +30,7 @@ endforeach()
 option(SMART_ENGINE_BUILD_GAME "Build the SDL application" ON)
 
 if(SMART_ENGINE_BUILD_GAME)
+    find_package(Threads REQUIRED)
     if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/SDL/CMakeLists.txt")
         message(FATAL_ERROR
                 "SDL submodule is missing. Run: git submodule update --init --recursive")
@@ -40,11 +41,12 @@ if(SMART_ENGINE_BUILD_GAME)
     add_library(engine_graphics STATIC
             engine/platform/platform.cpp
             engine/renderer/renderer.cpp
+            engine/renderer/snapshots.cpp
     )
     target_link_libraries(engine_graphics PUBLIC engine PRIVATE SDL3::SDL3)
     target_compile_options(engine_graphics PRIVATE -Wall -Wextra -Wpedantic)
 
     add_executable(robot_game game/main.cpp)
-    target_link_libraries(robot_game PRIVATE engine_graphics SDL3::SDL3)
+    target_link_libraries(robot_game PRIVATE engine_graphics SDL3::SDL3 Threads::Threads)
     target_compile_options(robot_game PRIVATE -Wall -Wextra -Wpedantic)
 endif()

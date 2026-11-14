@@ -1,7 +1,6 @@
 #include "renderer.hpp"
+#include "snapshots.hpp"
 
-#include "ecs/components.hpp"
-#include "ecs/world.hpp"
 #include "platform/platform.hpp"
 
 #include <SDL3/SDL.h>
@@ -30,7 +29,7 @@ void Renderer::clear() const {
 }
 
 // Отрисовка мира в бекбуфере
-void Renderer::drawDebugWorld(ecs::World& world) const {
+void Renderer::drawSnapshot(const RenderSnapshot& snapshot) const {
     int width = 0;
     int height = 0;
     // получаем размеры окна
@@ -45,23 +44,23 @@ void Renderer::drawDebugWorld(ecs::World& world) const {
 
     // Рисуем прямоугольники
     SDL_SetRenderDrawColor(renderer, 255, 80, 80, 255);
-    for (auto [entity, pos, box] : world.query<ecs::Position, ecs::BoxCollider>()) {
+    for (const auto [x, y, halfWidth, halfHeight] : snapshot.boxes) {
         const SDL_FRect rect{
-            .x = originX + (pos.x - box.halfWidth) * pixelsPerUnit,
-            .y = originY - (pos.y + box.halfHeight) * pixelsPerUnit,
-            .w = 2.0f * box.halfWidth * pixelsPerUnit,
-            .h = 2.0f * box.halfHeight * pixelsPerUnit
+            .x = originX + (x - halfWidth) * pixelsPerUnit,
+            .y = originY - (y + halfHeight) * pixelsPerUnit,
+            .w = 2.0f * halfWidth * pixelsPerUnit,
+            .h = 2.0f * halfHeight * pixelsPerUnit
         };
         SDL_RenderFillRect(renderer, &rect);
     }
 
     // Рисуем точки
     SDL_SetRenderDrawColor(renderer, 80, 220, 255, 255);
-    for (auto [entity, pos, point] : world.query<ecs::Position, ecs::PointCollider>()) {
+    for (const auto [x, y] : snapshot.points) {
         // Фактически эта точка, но для наглядности делаем ее больше.
         const SDL_FRect marker{
-            .x = originX + pos.x * pixelsPerUnit - 4.0f,
-            .y = originY - pos.y * pixelsPerUnit - 4.0f,
+            .x = originX + x * pixelsPerUnit - 4.0f,
+            .y = originY - y * pixelsPerUnit - 4.0f,
             .w = 4.0f, .h = 4.0f
         };
         SDL_RenderFillRect(renderer, &marker);
