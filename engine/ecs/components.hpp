@@ -12,6 +12,16 @@ namespace engine::ecs {
         float y = 0.0f;
     };
 
+    struct Rotation {
+        float angle = 0.0f;
+    };
+
+    struct DifferentialDrive {
+        float leftSpeed = 0.0f;
+        float rightSpeed = 0.0f;
+        float wheelDistance = 0.2f;
+    };
+
     struct PointCollider {
 
     };

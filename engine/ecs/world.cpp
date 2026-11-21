@@ -34,7 +34,7 @@ namespace engine::ecs {
     bool World::destroyEntity(Entity entity) {
         if (!isAlive(entity)) return false;
 
-        for (auto &storage: storages | std::views::values) {
+        for (const auto &storage: storages | std::views::values) {
             storage->remove(entity);
         }
 

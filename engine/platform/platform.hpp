@@ -1,6 +1,7 @@
 #pragma once
 
 struct SDL_Window;
+struct SDL_Gamepad;
 
 namespace engine {
 
@@ -11,8 +12,15 @@ namespace engine {
         D
     };
 
+enum class GamepadAxis {
+    LeftX,
+    LeftY,
+    RightY
+};
+
 class Platform {
     SDL_Window* window = nullptr;
+    SDL_Gamepad* gamepad = nullptr;
     bool running = true;
 
 public:
@@ -26,6 +34,8 @@ public:
     [[nodiscard]] SDL_Window* getWindow() const noexcept;
 
     [[nodiscard]] bool isKeyDown(Keys key) const;
+    [[nodiscard]] bool hasGamepad() const;
+    [[nodiscard]] float getGamepadAxis(GamepadAxis axis) const;
 };
 
 }

@@ -12,6 +12,7 @@ add_library(engine STATIC
         engine/systems/movement.cpp
         engine/simulation/simulation.cpp
         engine/geometry/collision.cpp
+        engine/runtime/runtime.cpp
 )
 
 target_include_directories(engine PUBLIC

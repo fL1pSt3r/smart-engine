@@ -1,21 +1,16 @@
+#include <algorithm>
+#include <cmath>
+#include <exception>
+#include <iostream>
+#include <vector>
+
 #include "ecs/components.hpp"
 #include "platform/platform.hpp"
 #include "renderer/renderer.hpp"
 #include "simulation/simulation.hpp"
 #include "systems/movement.hpp"
-
-#include <algorithm>
-#include <atomic>
-#include <chrono>
-#include <exception>
-#include <iostream>
-#include <cmath>
-#include <mutex>
-#include <thread>
-#include <utility>
-#include <vector>
-
 #include "renderer/snapshots.hpp"
+#include "runtime/runtime.hpp"
 
 using namespace engine;
 
@@ -23,18 +18,14 @@ std::vector<ecs::Entity> createScene(Simulation& simulation) {
     auto& world = simulation.getWorld();
 
     std::vector<ecs::Entity> robots;
-    for (int row = 0; row < 5; ++row) {
-        for (int column = 0; column < 2; ++column) {
-            const auto robot = world.createEntity();
-            world.addComponent(robot, ecs::Position{
-                .x = -1.4f + column * 0.6f,
-                .y = -0.8f + row * 0.4f
-            });
-            world.addComponent(robot, ecs::Velocity{});
-            world.addComponent(robot, ecs::PointCollider{});
-            robots.push_back(robot);
-        }
-    }
+    const auto robot = world.createEntity();
+    world.addComponent(robot, ecs::Position{
+        .x = -1.4f + 1 * 0.6f,
+        .y = -0.8f + 1 * 0.4f
+    });
+    world.addComponent(robot, ecs::Velocity{});
+    world.addComponent(robot, ecs::PointCollider{});
+    robots.push_back(robot);
 
     auto addWall = [&](float x, float y, float halfWidth, float halfHeight) {
         const auto wall = world.createEntity();
@@ -63,79 +54,25 @@ struct ControlState {
     float y = 0.0f;
 };
 
-struct SharedState {
-    std::mutex mutex;
-    ControlState control;
-    RenderSnapshot snapshot;
-    std::exception_ptr error;
-};
-
 ControlState readControl(const Platform& platform) {
     float x = platform.isKeyDown(Keys::D) - platform.isKeyDown(Keys::A);
-
     float y = platform.isKeyDown(Keys::W) - platform.isKeyDown(Keys::S);
 
-    const float length = std::hypot(x, y);
-    if (length > 1.0f) {
-        x /= length;
-        y /= length;
+    // Клавиатура работает и при подключённом геймпаде.
+    if (platform.hasGamepad() && x == 0.0f && y == 0.0f) {
+        x = platform.getGamepadAxis(GamepadAxis::LeftX);
+        y = -platform.getGamepadAxis(GamepadAxis::LeftY);
     }
 
-    return ControlState{.x = x, .y = y};
+    const float scale = std::max(1.0f, std::hypot(x, y));
+    return ControlState{.x = x / scale, .y = y / scale};
 }
 
 void updateRobotControl(ecs::World& world, ecs::Entity robot, const ControlState& control) {
-    constexpr float speed = 0.5f;
+    constexpr float maxSpeed = 0.5f;
     auto& velocity = world.getComponent<ecs::Velocity>(robot);
-    velocity.x = control.x * speed;
-    velocity.y = control.y * speed;
-}
-
-// получаем объекты по ссылке -> не создаем их копий
-void runSimulation(Simulation& simulation, ControlState& control, SharedState& shared, std::atomic<bool>& running) {
-    try {
-        auto previous = std::chrono::steady_clock::now();
-        // накопитель прошедшего, не обработанного времени
-        double accumulator = 0.0;
-        constexpr double stepDuration = Simulation::getFixedDt();
-
-        while (running.load()) {
-            const auto now = std::chrono::steady_clock::now();
-            const double elapsed = std::chrono::duration<double>(now - previous).count();
-            previous = now;
-            // после долгой паузы не догоняем всё пропущенное время, а четверть секунды
-            accumulator += std::min(elapsed, 0.25);
-
-            bool updated = false;
-            while (running.load() && accumulator >= stepDuration) {
-                {
-                    std::lock_guard lock(shared.mutex);
-                    control = shared.control;
-                }
-
-                simulation.step();
-                accumulator -= stepDuration;
-                updated = true;
-            }
-
-            if (updated) {
-                auto snapshot = buildRenderSnapshot(simulation.getWorld());
-                std::lock_guard lock(shared.mutex);
-                shared.snapshot = std::move(snapshot);
-            }
-
-            // между шагами поток спит, а не занимает процессор пустым циклом
-            if (running.load()) {
-                std::this_thread::sleep_for(
-                    std::chrono::duration<double>(stepDuration - accumulator)
-                );
-            }
-        }
-    } catch (...) {
-        // главный поток прочитает ошибку только после джойна
-        shared.error = std::current_exception();
-        running.store(false);
-    }
+    velocity.x = control.x * maxSpeed;
+    velocity.y = control.y * maxSpeed;
 }
 
 int main() {
@@ -143,53 +80,31 @@ int main() {
         Platform platform("Robot Game", 800, 600);
         Renderer renderer(platform);
 
-        ControlState control;
         Simulation simulation;
         const auto robots = createScene(simulation);
 
-        simulation.addSystem(
-            [robots, &control](ecs::World& world, float) {
-                for (const auto robot : robots) {
-                    updateRobotControl(world, robot, control);
-                }
-            }
-        );
-
         simulation.addSystem(systems::Movement::update);
+        Runtime runtime(simulation);
+        runtime.start();
 
-        SharedState shared;
-        shared.snapshot = buildRenderSnapshot(simulation.getWorld());
-        std::atomic<bool> running{true};
+        while (runtime.isRunning() && platform.pollEvents()) {
+            const auto input = readControl(platform);
 
-        std::thread simulationThread([&] {
-            runSimulation(simulation, control, shared, running);
-        });
-
-        try {
-            while (running.load() && platform.pollEvents()) {
-                const auto input = readControl(platform);
-                RenderSnapshot snapshot;
-                {
-                    std::lock_guard lock(shared.mutex);
-                    shared.control = input;
-                    snapshot = shared.snapshot;
+            runtime.setBeforeStep([robots, input](ecs::World& world) {
+                for (const auto robot : robots) {
+                    updateRobotControl(world, robot, input);
                 }
+            });
 
-                renderer.clear();
-                renderer.drawSnapshot(snapshot);
-                renderer.present();
-            }
-        } catch (...) {
-            running.store(false);
-            simulationThread.join();
-            throw;
+            const auto snapshot = runtime.getSnapshot();
+
+            renderer.clear();
+            renderer.drawSnapshot(snapshot);
+            renderer.present();
         }
 
-        running.store(false);
-        simulationThread.join();
-        if (shared.error) {
-            std::rethrow_exception(shared.error);
-        }
+        runtime.stop();
+        runtime.rethrowIfFailed();
 
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
